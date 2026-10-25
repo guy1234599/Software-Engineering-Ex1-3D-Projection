@@ -12,6 +12,8 @@ public final class Image2D {
     public int width() {return width;}
     public int height() {return height;}
     public void set(int x,int y,long unsignedValue) {
+        if (x < 0 || x >= width || y < 0 || y >= height)
+            throw new IndexOutOfBoundsException("Pixel outside image: (" + x + "," + y + ")");
         if (unsignedValue < 0 || unsignedValue > 0xFFFF_FFFFL)
             throw new IllegalArgumentException("Sample must be unsigned 32-bit");
         pixels[Math.addExact(Math.multiplyExact(y,width),x)]=(int)unsignedValue;
