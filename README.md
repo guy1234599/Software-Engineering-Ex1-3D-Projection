@@ -98,7 +98,6 @@ The assignment's **mandatory** benchmark is >30 processing FPS; **100+** is expe
 - [DATASET.md](DATASET.md) — data sources, formats and caveats
 - [TESTING.md](TESTING.md) — testing plan, test groups and reproduction
 - [EXPERIMENT.md](EXPERIMENT.md) — the assignment's short experiment report, results and MP4 files
-- [SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md) — eight To Do items, open verification and Git instructions
 
 ## Limitations
 
@@ -108,6 +107,3 @@ The assignment's **mandatory** benchmark is >30 processing FPS; **100+** is expe
 - Pixel-centre rasterization is not guaranteed to match the provided unit-step reference pixel-for-pixel.
 - Performance numbers are single-run observations on one laptop; reproducible measurements should include repetition/warm-up.
 
-## Source control
-
-Use meaningful, incremental Git commits. Generated `target/` files and IDE settings are ignored. Selected experiment videos in `results/` are intentionally included (explicit `.gitignore` exception); other MP4 files remain ignored. See [SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md) for the final commit/push procedure.
