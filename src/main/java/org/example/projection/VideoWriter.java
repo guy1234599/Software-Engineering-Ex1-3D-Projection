@@ -89,6 +89,24 @@ public final class VideoWriter implements AutoCloseable {
         }
     }
 
+    /**
+     * Experimental fast path that avoids creating the RGB BufferedImage canvas.
+     * JCodec 0.2.5 SequenceEncoder accepts RGB pictures; it performs the RGB-to-YUV
+     * conversion inside the encoder. No claim is made that this is native YUV.
+     */
+    public void writeRgbPicture(BufferedImage gray) throws IOException {
+        if (closed || failed) throw new IllegalStateException("VideoWriter is closed or failed");
+        Objects.requireNonNull(gray, "gray");
+        org.jcodec.common.model.Picture picture = GrayRgbPicture.fromGrayImage(gray, width, height);
+        try {
+            encoder.encodeNativeFrame(picture);
+            frameCount++;
+        } catch (IOException | RuntimeException error) {
+            failed = true;
+            throw error;
+        }
+    }
+
     public int frameCount() {
         return frameCount;
     }

@@ -3,3 +3,6 @@ target/
 *.iml
 out/
 *.mp4
+!results/
+!results/mrhead-demo-60.mp4
+!results/pipeline-phantom-v2-smooth-500-120.mp4

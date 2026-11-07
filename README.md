@@ -1,179 +1,113 @@
-
 # Software Engineering Ex1 — 3D Volume Plane Projection
 
-## Overview
+Java / Maven implementation of the **Introduction to Software Engineering (OOP/OOD), Exercise 1** assignment: produce a 2D image for each specified plane through a 3D NRRD volume and encode the ordered images as an MP4.
 
-This project is Exercise 1 for the course **Introduction to Software Engineering (OOP/OOD)**.
+**Status:** Working implementation; 77 current JUnit tests passed in the uploaded project's latest reports; the two supplied output videos were checked with `ffprobe`. See [EXPERIMENT.md](EXPERIMENT.md) for measured performance and caveats. This does **not** imply pixel-for-pixel equivalence to the lecturer's illustrative scanline pseudocode; see [ALGORITHM.md](ALGORITHM.md).
 
-The goal is to design and implement an efficient and reliable algorithm for extracting 2D images from 3D volumetric data.
+## What the program does
 
-The project emphasizes software design, object-oriented programming, correctness, testing, and runtime efficiency.
+1. Loads an attached, scalar, 3D NRRD volume (`raw` or `gzip`; unsigned 8-, 16- or 32-bit values). Nonnegative signed `short` is also accepted to handle the supplied `MRHead_1.nrrd`; negative signed short voxels are explicitly rejected.
+2. Reads an ordered list of triangle/trapezoid planes from CSV. Accepts both the original 9/12-coordinate rows and the lecturer's spreadsheet format with an exact header and a `3`/`4` point-count column.
+3. Validates the whole plane list, generates a nearest-neighbour sampled 2D image per plane, and assigns **0** to out-of-volume positions.
+4. Converts samples to grayscale using one fixed global min/max range and centres each image on a common black canvas without stretching.
+5. Writes an H.264 MP4 with **one frame per plane, in CSV order**, at **30 playback FPS**. A temporary output file avoids publishing incomplete output on failure.
 
-## Problem Definition
+Geometry is restricted to **isosceles triangles** and **isosceles trapezoids** whose points follow the documented order. A non-isosceles or degenerate polygon is rejected with its CSV line number. Coordinates are in **voxel-index space**, not physical millimetres.
 
-Given:
+## Requirements
 
-- A 3D volume `M` of dimensions `sx × sy × sz`.
-- Each voxel contains an unsigned 8-bit, 16-bit, or 32-bit integer.
-- A plane defined by three or four 3D points.
+- Java **21+** (tested on OpenJDK 24.0.1 under Windows 11).
+- Maven (bundled with IntelliJ IDEA or installed separately).
+- Maven dependencies: JUnit 5.11.4 for tests; JCodec and JCodec-JavaSE 0.2.5 for MP4.
 
-The system computes a 2D image representing a slice of the volume along the specified plane.
+## Quick start in IntelliJ IDEA (recommended)
 
-Supported geometric shapes:
+1. **File → Open** the project directory containing `pom.xml`.
+2. Open **View → Tool Windows → Maven → Lifecycle → test**. All current JUnit tests should pass.
+3. Choose **Run → Edit Configurations → + → Application**, with main class `org.example.projection.Main` and the project root as the working directory.
+4. Set program arguments to:
 
-- Isosceles triangles (3 points).
-- Isosceles trapezoids (4 points).
+   ```text
+   samples/MRHead_1.nrrd samples/mrhead-demo-60.csv target/mrhead-demo-60.mp4
+   ```
 
-Points outside the volume are assigned a value of zero.
+5. Run. The program should report 256×256×130 voxels and 60 frames; the MP4 appears under `target/`.
 
-## Project Scope
+The main class also launches a small **90-frame synthetic demonstration** when run with *no* arguments from the project root.
 
-### Functional Requirements
+## Command-line demo (Windows)
 
-1. Read 3D volumetric data from NRRD files.
-2. Read plane definitions from CSV files.
-3. Validate input data and plane geometry.
-4. Generate a 2D image for each plane.
-5. Support unsigned 8-bit, 16-bit, and 32-bit values.
-6. Generate an MP4 video with one frame per plane.
-7. Preserve the order of planes in the CSV file.
+After **Maven → Lifecycle → test** (or `mvn test`) has compiled the project, run from the project root in **Command Prompt**:
 
-### Performance Requirements
-
-For a volume of size `500 × 500 × 500` bytes:
-
-- Minimum required performance: **30+ FPS**.
-- Expected performance: **100+ FPS**.
-- Optimize processing time and memory usage.
-
-Performance measurements will distinguish between slice generation and video encoding.
-
-## Design Decisions
-
-### Programming Language
-
-Java.
-
-### Volume Representation
-
-The 3D matrix will be represented using a contiguous one-dimensional array.
-
-Depending on the input data type:
-
-- `byte[]` for 8-bit data.
-- `short[]` for 16-bit data.
-- `int[]` for 32-bit data.
-
-For an x-fastest memory layout, the indexing formula is:
-
-`index = x + sx * (y + sy * z)`
-
-The NRRD reader will verify the relevant data layout before applying this mapping.
-
-### Sampling Method
-
-The initial implementation uses **Nearest Neighbor interpolation**.
-
-Trilinear interpolation may be considered as a future extension to improve image quality.
-
-### Geometric Mapping
-
-The initial design supports isosceles triangles and trapezoids.
-
-The implementation will investigate aspect-ratio-preserving sampling while documenting differences from the reference algorithm supplied in the assignment.
-
-Final coordinate and pixel-boundary conventions will be specified in the algorithm design document.
-
-## Planned Architecture
-
-| Component | Responsibility |
-| --- | --- |
-| Volume | Abstract 3D volume access |
-| ByteVolume | 8-bit volume implementation |
-| ShortVolume | 16-bit volume implementation |
-| IntVolume | 32-bit volume implementation |
-| Point3D | 3D point representation |
-| PlaneDefinition | Plane geometry representation |
-| VoxelSampler | Sampling strategy interface |
-| NearestNeighborSampler | Nearest Neighbor implementation |
-| PlaneSampler | Plane projection algorithm |
-| Image2D | 2D output image |
-| NrrdReader | Read NRRD files |
-| CsvPlaneReader | Read CSV plane definitions |
-| VideoWriter | Generate MP4 output |
-| Main | Application entry point |
-
-## Planned Usage
-
-The final application will accept three arguments:
-
-```text
-java -jar target/volume-projection.jar input.nrrd planes.csv output.mp4
+```bat
+run-demo.cmd samples\MRHead_1.nrrd samples\mrhead-demo-60.csv target\mrhead-demo-60.mp4
 ```
 
-This is the proposed Java command-line interface. It is not yet implemented.
+`run-demo.cmd` supplies the compiled Java classes and local Maven JCodec jars on the classpath. It does **not** require an executable/fat JAR. If no arguments are given, it uses the MRI example above. Alternatively, use the IntelliJ `Main` run configuration. The assignment illustrates a Python entry point, but expressly permits Java; this is the equivalent **three-path CLI** in Java.
 
-### Inputs
+If using a shell with Maven and a suitable Java installation:
 
-- `input.nrrd` — 3D volumetric data.
-- `planes.csv` — List of planes defined by 3 or 4 points.
+```text
+mvn test
+```
 
-### Output
+The default `mvn package` produces an ordinary Java JAR, **not** a standalone executable JAR; do not use `java -jar ...` without supplying dependencies and a main manifest. The batch launcher and IntelliJ command above are the verified intended interfaces for this version.
 
-- `output.mp4` — Video containing the generated slices in CSV order.
+## Datasets and examples
 
-## Testing Strategy
+| File | Purpose |
+| --- | --- |
+| `samples/MRHead_1.nrrd` | Course-linked, gzip-compressed MRI sample; 256×256×130; nonnegative signed 16-bit voxels. |
+| `samples/mrhead-demo-60.csv` | 60 valid, parallel MRI cutting planes suited to that volume. |
+| `samples/ex0-professor-original.csv` | Original professor spreadsheet exported to CSV; retained **unchanged** for compatibility and invalid-input diagnostics. **It is not suitable as-is for the 60-frame MRI demonstration.** |
+| `samples/synthetic-32x32x32.nrrd` | Small deterministic raw 8-bit fixture. |
+| `samples/synthetic-32x32x32-gzip.nrrd` | Compressed equivalent fixture. |
+| `samples/tiny-2x2x2.nrrd` | Very small fixture for smoke tests. |
+| `samples/planes-example.csv` | Minimal plane-coordinate example. |
+| `results/mrhead-demo-60.mp4` | Actual MRI experiment output: 60 frames, 196×196, 2.00 s. |
+| `results/pipeline-phantom-v2-smooth-500-120.mp4` | Large synthetic experiment output: 120 frames, 500×500, 4.00 s. |
 
-The project will include:
+The 500³ NRRD is generated by `FullPipelineBenchmark` in `target/stage6/` and is not committed as a 125 MB dataset. See [DATASET.md](DATASET.md).
 
-- Unit tests using JUnit.
-- Tests with synthetic 3D volumes.
-- Mathematical correctness tests.
-- Boundary and invalid-input tests.
-- NRRD and CSV integration tests.
-- MP4 output verification.
-- Runtime performance benchmarks.
+## Measurements
 
-Performance experiments will measure FPS on large volumes.
+| Input | Projection only | End-to-end (including MP4) |
+| --- | ---: | ---: |
+| Synthetic 500³-byte phantom, 120 × 500×500 slices | **300.4 slices/s** (399.53 ms total) | **19.1 frames/s** (6.283 s wall time) |
+| Lecturer's MRI, 60 × 196×196 slices | **1,483.8 slices/s** (40.44 ms total) | Not separately recorded in that run |
 
-## Dataset
+The assignment's **mandatory** benchmark is >30 processing FPS; **100+** is expected for 500³-byte input. The 300.4 FPS projection measurement exceeds both when interpreting *processing FPS* as slice computation. If the lecturer intends **end-to-end MP4 production**, the measured 19.1 frames/s does **not** satisfy 30 and that interpretation must be clarified. MP4 *playback* 30 FPS is yet another distinct number. Details and measurement methodology are in [EXPERIMENT.md](EXPERIMENT.md).
 
-The project will use NRRD datasets from the open-source **3D Slicer** ecosystem.
+## Architecture and design
 
-Small synthetic datasets will also be created to verify algorithm correctness.
+- `NrrdReader` → `Volume` (`ByteVolume`, `ShortVolume`, `IntVolume` with contiguous primitive arrays).
+- `CsvPlaneReader` → `TrianglePlane` / `TrapezoidPlane` (validated geometry).
+- `PlaneSampler` + `NearestNeighborSampler` → `Image2D`.
+- `IntensityMapper` → grayscale `BufferedImage`.
+- `FrameComposer` → fixed black video canvas.
+- `VideoWriter` → JCodec H.264 MP4; **AWT** is the default, while Direct RGB remains an opt-in experiment (`-Dprojection.videoMode=direct-rgb`).
+- `Main` validates, processes, benchmarks substeps and publishes the output.
 
-The selected datasets and their sources will be documented.
+**Important design distinction:** our implementation uses **pixel-centre sampling in an orthogonal in-plane basis** with 1 voxel-index unit per pixel. The supplied teaching pseudocode instead walks the triangle sides and each scanline in unit steps. Both compute planar samples, but may disagree on individual pixels. Our method is documented and tested on hand-computed matrices; exact pseudocode compatibility remains an external acceptance question.
 
-## Project Status
+## Documents and testing
 
-**Current phase: Requirements Analysis and Software Design**
+- [SRS.md](SRS.md) — software requirements and scope
+- [DESIGN.md](DESIGN.md) — OOD responsibilities and interfaces
+- [ALGORITHM.md](ALGORITHM.md) — detailed formulas and pseudocode
+- [DATASET.md](DATASET.md) — data sources, formats and caveats
+- [TESTING.md](TESTING.md) — testing plan, test groups and reproduction
+- [EXPERIMENT.md](EXPERIMENT.md) — the assignment's short experiment report, results and MP4 files
+- [SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md) — eight To Do items, open verification and Git instructions
 
-### Progress
+## Limitations
 
-- [x] Create Git repository
-- [x] Define initial project scope
-- [x] Select programming language
-- [x] Select volume representation
-- [x] Select initial sampling method
-- [x] Approve preliminary architecture
-- [ ] Complete SRS document
-- [ ] Finalize algorithm design
-- [ ] Define datasets
-- [ ] Implement Java classes
-- [ ] Implement projection algorithm
-- [ ] Implement NRRD and CSV readers
-- [ ] Implement MP4 generation
-- [ ] Complete automated testing
-- [ ] Optimize performance
-- [ ] Perform experiment and document results
+- Attached 3D NRRD only; no detached `.nhdr`, floating-point scalar type, unsupported encodings or signed short data containing negative values.
+- The original lecturer CSV has rows that fail this implementation's isosceles/coplanarity checks and coordinates extending beyond MRI volume bounds. Do not silently change its rows: see `DATASET.md`.
+- No non-isosceles triangles, arbitrary polygons or trilinear interpolation.
+- Pixel-centre rasterization is not guaranteed to match the provided unit-step reference pixel-for-pixel.
+- Performance numbers are single-run observations on one laptop; reproducible measurements should include repetition/warm-up.
 
-## Deliverables
+## Source control
 
-1. Git repository and README.
-2. Software Requirements Specification (SRS).
-3. Detailed algorithm design.
-4. Documented NRRD datasets.
-5. Testing strategy and automated tests.
-6. Java implementation with Git history.
-7. Command-line demonstration.
-8. Experimental report and generated MP4 file.
+Use meaningful, incremental Git commits. Generated `target/` files and IDE settings are ignored. Selected experiment videos in `results/` are intentionally included (explicit `.gitignore` exception); other MP4 files remain ignored. See [SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md) for the final commit/push procedure.

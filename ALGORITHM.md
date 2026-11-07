@@ -1,6 +1,6 @@
 # Algorithm Design — 3D Volume Plane Projection (Ex1)
 
-**Status:** Reviewed design (2026-10-21); numerical examples checked independently. Implementation, performance measurements, and compatibility confirmation with the assignment reference remain pending.
+**Status:** Implementation-aligned algorithm specification (2026-11-07). Hand-computed test vectors are covered by JUnit; projection-only performance has been measured. **Exact pixel correspondence with the lecturer's unit-step reference remains unverified.**
 
 ## 1. Purpose and scope
 
@@ -156,7 +156,7 @@ Benchmark projection separately from NRRD loading, grayscale normalization and M
 
 ## 7. Preliminary synthetic test vectors
 
-These are manually interpretable examples independently reproduced with a small mathematical implementation on 2026-10-21. They have **not** yet been run as Java JUnit tests. Define an unsigned **16-bit** synthetic volume by `M[x,y,z] = x + 10*y + 100*z`, with dimensions `8×8×8` and all queried samples within range.
+These hand-calculated examples were independently derived and are now checked against the Java implementation in `Stage5SliceCorrectnessTest` (both triangles and trapezoids). Define an unsigned **16-bit** synthetic volume by `M[x,y,z] = x + 10*y + 100*z`, with dimensions `8×8×8` and all queried samples within range.
 
 ### Test T1 — Triangle
 
@@ -184,7 +184,7 @@ Expected rows:
 [41, 42, 43, 44]
 ```
 
-### Further automated tests to implement
+### Additional automated regression tests implemented
 
 - A plane fully outside the volume => all-zero image.
 - A nonisosceles triangle => validation error.
@@ -196,28 +196,29 @@ Expected rows:
 - Cropping and fixed-canvas placement => no stretching and correct CSV frame order.
 - End-to-end NRRD RAW/GZIP loading and MP4 output; measure actual processing FPS.
 
-## 8. Review against the assignment (2026-10-21)
+## 8. Implementation review against the assignment (2026-11-07)
 
 | Assignment condition | Review outcome |
 | --- | --- |
-| 3D scalar raster with unsigned 8/16/32-bit values | Addressed in the volume architecture; implementation pending. |
-| Plane described by 3 points forming an isosceles triangle | Supported; degeneracy and numeric tolerances must be tested. |
-| Optional 4-point isosceles trapezoid | Supported through two equal-length sides and parallel bases; point ordering/coplanarity validated. |
+| 3D scalar raster with unsigned 8/16/32-bit values | Implemented by `ByteVolume`/`ShortVolume`/`IntVolume`; tested with unsigned extrema. |
+| Plane described by 3 points forming an isosceles triangle | Implemented with validation and JUnit regression tests. |
+| Optional 4-point isosceles trapezoid | Implemented and tested for positive/invalid trapezoid cases. |
 | Output triangle matrix sized by `Dab × Dbc` | Preserved as `H=ceil(Dab)`, `W=ceil(Dbc)` (integer rounding is our design choice). |
 | Sample outside volume becomes zero | Covered by bounds checks before and after NN rounding. |
 | Reference unit-step sampling along triangle sides | **Deliberately differs.** Pixel-center orthogonal sampling preserves proportions but produces different pixels. Document and compare against the reference. |
-| Minimum 30+ processing FPS; target 100+ on 500³-byte input | Not yet measured; cannot claim compliance before benchmarking. |
-| NRRD + CSV inputs, MP4 frame per CSV plane in order | Planned in other components; end-to-end validation pending. |
+| Minimum 30+ processing FPS; target 100+ on 500³-byte input | Measured 300.4 projection-only FPS on a 500³-byte volume, 120 × 500×500 frames (single run; see EXPERIMENT.md). |
+| NRRD + CSV inputs, MP4 frame per CSV plane in order | Implemented and exercised on synthetic and professor MRI datasets; output MP4 independently inspected. |
 
 **Approval caveat:** The source assignment explicitly gives a sampling procedure. The geometry-preserving method is a documented extension/alternative, not a pixel-for-pixel reimplementation of that procedure. If assessment expects exact reference samples, add a compatible reference strategy or obtain lecturer approval for the alternative. Do not silently substitute one for the other.
 
-**Verified synthetic test calculations:** T1 and T2 match the matrices above under pixel-center positioning, Java-compatible half-up rounding for nonnegative ties, and the specified geometric inclusion rule. More tests are needed for tilted planes, translated/rotated geometry, decimals, boundary conditions and tiny patches.
+**Verified synthetic test calculations:** T1 and T2 match JUnit assertions under pixel-center positioning, Java-compatible half-up rounding for nonnegative ties, and the specified geometric inclusion rule. Additional tests cover XZ and slanted planes, translations, borders, input types and tiny patches.
 
-## 9. Open points before implementation
+## 9. Fixed choices and remaining assessment question
 
-- Numerical tolerance values (`EPS`) and treatment of floating-point values at geometric/volume boundaries, including `x` near `size-0.5`.
-- Precise restrictions on NRRD variants (including detached data files).
-- Output size limits to protect memory.
-- Whether automated assessment requires exact pixel-by-pixel correspondence with the assignment's unit-step reference pseudocode, rather than the documented geometry-preserving variant.
+- Geometry tolerance is implemented as `GeometryValidation.EPS=1e-6`; inclusion interval uses `PlaneSampler.PIXEL_EPS=1e-9`.
+- The continuous volume domain is half-open; nearest-neighbour ties follow `Math.round`, with a second bounds check.
+- The reader intentionally rejects detached NRRD payloads, negative signed-short voxels and unsupported encodings.
+- Slice/video output allocations are bounded by 25 million pixels; the H.264 canvas is even and at least 128 pixels in each dimension.
+- **Remaining external acceptance question:** whether the grader requires exact pixel-by-pixel equivalence to the handout's unit-step scanline pseudocode, rather than our documented pixel-centre alternative. We do not claim that equivalence.
 
-This document is a **design proposal** until these items and the final implementation are verified.
+See [EXPERIMENT.md](EXPERIMENT.md) for measured throughput and [TESTING.md](TESTING.md) for regression coverage.

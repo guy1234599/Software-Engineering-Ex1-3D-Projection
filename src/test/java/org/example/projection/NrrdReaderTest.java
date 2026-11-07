@@ -73,13 +73,25 @@ class NrrdReaderTest {
         assertTrue(assertThrows(IOException.class, () -> reader.read(file)).getMessage().contains("longer"));
     }
 
-    @Test void rejectsUnsupportedSignedAndFloatingType() throws IOException {
-        for (String type : new String[]{"short", "float"}) {
-            Path file = write("badtype.nrrd", type, "raw", null,
-                    "1 1 1", new byte[]{1}, "\n", "");
-            assertTrue(assertThrows(IOException.class, () -> reader.read(file)).getMessage()
-                    .contains("Unsupported NRRD scalar type"));
-        }
+    @Test void rejectsUnsupportedFloatingType() throws IOException {
+        Path file = write("badtype.nrrd", "float", "raw", null,
+                "1 1 1", new byte[]{1}, "\n", "");
+        assertTrue(assertThrows(IOException.class, () -> reader.read(file)).getMessage()
+                .contains("Unsupported NRRD scalar type"));
+    }
+
+    @Test void signedShortWithNonnegativeVoxelsIsAccepted() throws IOException {
+        Volume volume = reader.read(write("mrhead-mini.nrrd", "short", "gzip", "little",
+                "2 1 1", gzip(new byte[]{0, 0, 0x17, 0x01}), "\n", ""));
+        assertEquals(0L, volume.getVoxel(0, 0, 0));
+        assertEquals(279L, volume.getVoxel(1, 0, 0));
+    }
+
+    @Test void signedShortWithNegativeVoxelsIsRejectedRatherThanMisreadAsUnsigned() throws IOException {
+        Path file = write("negative-short.nrrd", "short", "raw", "little",
+                "2 1 1", new byte[]{0, 0, (byte) 0xff, (byte) 0xff}, "\n", "");
+        IOException error = assertThrows(IOException.class, () -> reader.read(file));
+        assertTrue(error.getMessage().contains("negative voxel"));
     }
 
     @Test void rejectsUnsupportedDimensionsAndMissingEndian() throws IOException {

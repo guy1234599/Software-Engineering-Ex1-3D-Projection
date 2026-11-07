@@ -1,157 +1,99 @@
 # Software Requirements Specification (SRS)
 
-**Project:** Software Engineering Ex1 — 3D Volume Plane Projection  
-**Version:** 0.1 (Draft)  
-**Status:** Requirements approved in discussion; unresolved design choices are explicitly marked **TBD**.
+**Project:** Software Engineering Ex1 — 3D Volume Plane Projection
+**Version:** 1.0 — implementation-aligned, 2026-11-07
+**Status:** Implemented/tested scope and explicitly documented exclusions. This SRS reflects the delivered Java source, not a future proposal.
 
-## 1. Purpose and scope
+## 1. Goal and boundaries
 
-The application accepts a 3D raster volume stored in an NRRD file and an ordered list of 3D plane definitions stored in a CSV file. It generates a two-dimensional sampled image for each plane and exports those images, in the same order, as frames in an MP4 video.
+Given a scalar 3D volume `M` and an ordered list of isosceles-triangle or isosceles-trapezoid patches in 3D, sample one 2D image per patch and produce a corresponding H.264 MP4 frame. The geometry sampling method is deterministic; all points outside the source volume have value zero. The educational assignment values algorithm design, code reliability and runtime performance.
 
-The project prioritizes correctness, robust input handling, clear object-oriented design, automated testing, and efficient slice generation.
+Input point coordinates represent **voxel array indices**. NRRD physical spacing and orientation fields are not used to transform the CSV coordinates.
 
-**In scope:** isosceles triangles, isosceles trapezoids, unsigned 8/16/32-bit volume data, voxel-index coordinates, nearest-neighbor sampling, RAW/GZIP NRRD payloads, and MP4 output.
+## 2. Requirements traceability
 
-**Not in the initial scope:** general polygons, arbitrary non-isosceles triangles, physical-coordinate CSV inputs, or trilinear interpolation.
-
-## 2. Input requirements
-
-| ID | Requirement |
+| ID | Requirement and current implementation |
 | --- | --- |
-| FR-01 | The system shall load a three-dimensional raster volume from an NRRD file. |
-| FR-02 | The system shall support unsigned 8-bit, 16-bit, and 32-bit integer voxel values without discarding their original bit patterns during storage and sampling. |
-| FR-03 | The system shall support NRRD payload encodings `raw` and `gzip` (`gz` where applicable). |
-| FR-04 | The reader shall interpret NRRD `dimension`, `sizes`, `type`, `encoding`, and relevant `endian` metadata, and report invalid or unsupported values. |
-| FR-05 | The system shall reject unsupported dimensions, truncated payloads, and inconsistent declared data sizes with a descriptive error. |
-| FR-06 | The system shall read an ordered CSV list of plane definitions without a header. Each nonempty record shall contain 9 numeric coordinates (three points) or 12 numeric coordinates (four points). |
-| FR-07 | The CSV coordinates shall be interpreted in voxel-index coordinates `(x, y, z)`, not physical millimetres. Decimal coordinates are valid. |
-| FR-08 | The system shall determine the plane shape from the number of coordinates: 9 for an isosceles triangle and 12 for an isosceles trapezoid. |
-| FR-09 | The system shall validate that coordinates are finite numbers and that plane geometry is nondegenerate and satisfies the specified geometric constraints. |
+| FR-01 | Read attached scalar, 3D NRRD (`NRRD0001`–`0005`), x-fastest data storage. |
+| FR-02 | Support unsigned 8-, 16- and 32-bit integers without loss of bit patterns. Also accept signed 16-bit voxels **only when all samples are nonnegative** (compatibility with the course MRI). |
+| FR-03 | Support NRRD `raw`, `gzip` and `gz` encodings. |
+| FR-04 | Parse `dimension`, `sizes`, `type`, `encoding`, and `endian` where applicable. Reject inconsistent/unsupported headers, truncated and excessive data. |
+| FR-05 | Accept sizes `1 <= sx,sy,sz < 1024`, subject to Java array/memory limits. |
+| FR-06 | Read ordered CSV either with 9/12 numeric coordinates per row or with the **exact course header** and a point-count column (`3` or `4`) followed by coordinates; ignore blank lines. |
+| FR-07 | Require finite decimal point coordinates in `(x,y,z)` voxel indices. Preserve CSV order. |
+| FR-08 | Require 3 points to be a nondegenerate isosceles triangle, or 4 points to be a coplanar isosceles trapezoid with same-direction parallel bases and equal legs; reject other geometries. |
+| FR-09 | Report invalid records with filename, physical source-line number and reason; do not silently ignore errors. |
+| FR-10 | Produce exactly one sampled `Image2D` per valid plane. |
+| FR-11 | Sample by nearest neighbour using `Math.round` after continuous half-open bounds checking; return zero when outside. |
+| FR-12 | For triangles, output width `ceil(|BC|)` and height `ceil(|AB|)` (minimum 1); trapezoids use bounding span and common-leg length rounded up. |
+| FR-13 | Use the documented pixel-centre in-plane orthogonal mapping; all rows are deterministic for fixed data. |
+| FR-14 | Keep voxel loading, CSV parsing, geometry, sampling, image mapping, composition and MP4 encoding as separate modules. |
+| FR-15 | Generate H.264 MP4 with one video frame per CSV plane, in order. |
+| FR-16 | Use default playback rate 30 FPS, independent of processing throughput. |
+| FR-17 | Put varying-size sampled images on one even-dimensioned black canvas, centred and **without scaling**; minimum 128 pixels each dimension for decoder compatibility. |
+| FR-18 | Map source intensities to 8-bit grayscale using one global source-volume min/max range; preserve original sampled voxel values in `Image2D`. |
+| FR-19 | Validate the plane list before loading/rendering and do not publish a partial MP4 on processing failure. |
+| FR-20 | Report file/read/geometry/encode problems and return nonzero process exit status. |
 
-### 2.1 CSV coordinate ordering
+## 3. Input conventions
 
-- Triangle: `Ax,Ay,Az,Bx,By,Bz,Cx,Cy,Cz`.
-- Trapezoid: `A1x,A1y,A1z,A2x,A2y,A2z,Bx,By,Bz,Cx,Cy,Cz`.
-- One plane definition per CSV record; records are processed in file order.
-- **TBD:** policy for blank lines and comments, numeric tolerance for equal side lengths and parallelism.
+### NRRD
 
-### 2.2 NRRD scope notes
+The `NrrdReader` handles attached payload NRRD with raw and gzip encodings. 16-/32-bit types must declare `endian: little` or `endian: big`. Volume array index:
 
-- The initial reader targets three-dimensional, scalar, attached-data `.nrrd` files.
-- Correctly interpret raw byte order for 16- and 32-bit values; decompress GZIP payloads before decoding the values.
-- **TBD:** detached-header `.nhdr` / external `data file` support, depending on the chosen dataset.
-- Spatial metadata, if present, may be retained, but the initial CSV coordinate convention is voxel indices.
-
-## 3. Processing requirements
-
-| ID | Requirement |
-| --- | --- |
-| FR-10 | The system shall generate one 2D sampled image per valid plane. |
-| FR-11 | The initial sampling strategy shall be nearest neighbour. |
-| FR-12 | Sampling coordinates shall be rounded consistently to discrete voxel indices; samples outside the volume shall return zero. |
-| FR-13 | For triangles, the logical output matrix dimensions shall initially follow the assignment's dimensions: `width = ceil(distance(B,C))`, `height = ceil(distance(A,B))`. |
-| FR-14 | Plane rasterization shall be deterministic for fixed input data and plane coordinates. |
-| FR-15 | The sampling and output-image components shall remain independent from file parsing and video encoding. |
-
-**TBD — geometric mapping:** The precise placement of pixel centres, triangle boundaries, and trapezoid dimensions remains under design. An aspect-ratio-preserving alternative was discussed but is not yet finalized. The final algorithm specification must explicitly distinguish choices that differ from the lecturer's reference pseudocode.
-
-## 4. MP4 output requirements
-
-| ID | Requirement |
-| --- | --- |
-| FR-16 | The system shall generate an `.mp4` video with exactly one frame for each valid plane in the CSV input, in the same order. |
-| FR-17 | The default playback frame rate shall be **30 FPS**. This is separate from the processing throughput requirement. |
-| FR-18 | Every encoded video frame shall have the same dimensions. Images of different sizes shall be centred on a uniform black canvas, without nonuniform stretching. |
-| FR-19 | The canvas shall be large enough for all generated images, with any additional even-dimension padding required by the selected encoder. |
-| FR-20 | The video shall display sampled intensities as 8-bit grayscale, using one fixed linear intensity mapping for all frames. |
-| FR-21 | The source voxel values shall remain unchanged by the grayscale conversion. The mapping range shall be calculated once from the source volume; the case `min == max` shall be handled safely. |
-
-## 5. Validation and error handling
-
-| ID | Requirement |
-| --- | --- |
-| FR-22 | The entire CSV list shall be validated before video generation begins. |
-| FR-23 | On invalid input, processing shall stop, return a nonzero process exit code, and explain the error. |
-| FR-24 | CSV errors shall include the file name, source line number, reason, and relevant values or constraints where feasible. |
-| FR-25 | The program shall not leave an incomplete output video after an input-validation or encoding failure. |
-| FR-26 | Missing files, inaccessible paths, unsupported NRRD data, and output-write failures shall produce actionable error messages. |
-
-A plane that extends beyond the volume is not inherently invalid: sampled points outside the volume produce zero, as required by the assignment.
-
-## 6. Non-functional requirements
-
-| ID | Requirement |
-| --- | --- |
-| NFR-01 | Slice generation on a `500 × 500 × 500` 8-bit volume shall achieve **more than 30 slices/second** (mandatory target stated by the assignment); **at least 100 slices/second** is the expected performance goal. |
-| NFR-02 | Processing throughput shall be benchmarked independently from MP4 encoding and disk I/O; the experimental report shall describe the hardware and measurement method. |
-| NFR-03 | Volume samples shall be stored in contiguous primitive arrays appropriate to their bit depth (`byte[]`, `short[]`, or `int[]`) with a documented axis order. |
-| NFR-04 | The design shall separate responsibilities such as volume loading, geometry, sampling, intensity conversion, and video writing. |
-| NFR-05 | Unit and integration tests shall cover normal inputs, invalid data, geometric boundaries, bit depths, NRRD encoding variants, and output-frame ordering. |
-| NFR-06 | The source shall be version-controlled with meaningful commits and documented build/run instructions. |
-
-**Performance interpretation:** The lecturer refers to FPS for algorithm runtime, but does not explicitly specify whether video encoding is included. The project will report both slice-generation throughput and end-to-end execution time, clearly labelled.
-
-## 7. Proposed architecture
-
-- `Volume`: read-only access to the 3D raster and dimensions.
-- `ByteVolume`, `ShortVolume`, `IntVolume`: bit-depth-specific contiguous storage.
-- `Point3D`: 3D coordinate value type.
-- `PlaneDefinition`: validated 3- or 4-point shape description.
-- `VoxelSampler` / `NearestNeighborSampler`: sampling strategy.
-- `PlaneSampler`: geometry-to-image sampling algorithm.
-- `Image2D`: sampled plane image.
-- `NrrdReader`: NRRD header, decoding, and payload loading.
-- `CsvPlaneReader`: ordered CSV parsing and diagnostics.
-- `IntensityMapper`: source intensity to 8-bit grayscale mapping.
-- `VideoWriter`: constant-size video frame output.
-- `Main`: command-line wiring and error reporting.
-
-This section documents the approved preliminary architecture, not completed implementation.
-
-## 8. Interface and deliverables
-
-**Proposed Java command (not yet implemented):**
-
-```sh
-java -jar target/volume-projection.jar input.nrrd planes.csv output.mp4
+```text
+index(x,y,z) = x + sx * (y + sy*z)
 ```
 
-**TBD:** The assignment's example uses `python Ex0.py ...`, while also explicitly permitting Java. Confirm whether the demo entry point must match that exact invocation or whether an equivalent Java CLI is acceptable.
+Data may be too large for available RAM, despite valid dimension limits. The reader explicitly rejects volumes larger than the supported single Java array bound.
 
-Required project deliverables:
+### CSV
 
-1. Repository and README defining the problem and scope.
-2. SRS document.
-3. Detailed main-algorithm design.
-4. Documented dataset of NRRD files.
-5. Testing strategy including demo coverage.
-6. Implementation with frequent commits.
-7. Working demonstration that outputs an MP4 for the ordered CSV planes.
-8. Experiment summary and resulting MP4 file.
+**Coordinate-only:** each nonempty record has 9 coordinates (`Ax,Ay,Az,Bx,By,Bz,Cx,Cy,Cz`) or 12 (`A1x,A1y,A1z,A2x,A2y,A2z,Bx,By,Bz,Cx,Cy,Cz`).
 
-## 9. Acceptance tests (initial plan)
+**Official spreadsheet:** exact header `Number of Points (3 or 4),x1,y1,z1,...,x4,y4,z4`; each record begins with 3/4, followed by 9/12 coordinates. Blank unused cells for 3-point rows are accepted. Unknown headings and nonblank extra values are rejected.
 
-| ID | Acceptance criterion |
+The full original `samples/ex0-professor-original.csv` is preserved as test data. Some rows are intentionally/inherently invalid under the isosceles constraints and must result in a diagnostic; the valid demo uses `samples/mrhead-demo-60.csv`.
+
+## 4. Geometry/sampling
+
+See [ALGORITHM.md](ALGORITHM.md) for complete derivation. The pixel-centre mapping uses two orthogonal unit axes in the plane, covers the bounding trapezoid, and tests whether a pixel centre lies inside the patch before sampling the NRRD volume. `GeometryValidation.EPS = 1e-6` is used for relative validity tests; `PlaneSampler.PIXEL_EPS = 1e-9` is used around raster interval endpoints. The scanline reference algorithm in the handout is **not followed pixel-for-pixel**; this is an explicit design alternative and an assessment caveat.
+
+## 5. Output, failure and security constraints
+
+- MP4 codec: H.264 via JCodec 0.2.5, default AWT pipeline.
+- Destination must be `.mp4` and distinct from the input paths.
+- Validation failures leave an existing output undisturbed. The program stages the video before publication.
+- Maximum slice and video canvas area: 25,000,000 pixels. Video canvas dimensions even and at least 128×128.
+- Incomplete/empty frame list must not result in a published partial MP4.
+- The experimental Direct RGB option is not the default and has no promised speed-up.
+
+## 6. Nonfunctional requirements
+
+| ID | Requirement/status |
 | --- | --- |
-| AT-01 | Load small synthetic NRRD volumes for each supported unsigned bit depth and verify known voxel values. |
-| AT-02 | Load equivalent RAW and GZIP volumes and verify identical sampled values. |
-| AT-03 | Parse a CSV containing mixed 9- and 12-number records and preserve their order. |
-| AT-04 | Reject a malformed plane with an error identifying the correct file and line number. |
-| AT-05 | Verify nearest-neighbour rounding and zero for out-of-bounds samples. |
-| AT-06 | Verify that every video frame uses a common canvas, without aspect-ratio distortion. |
-| AT-07 | Verify MP4 frame count and order using a dataset with identifiable planes. |
-| AT-08 | Benchmark repeated slice generation on an 8-bit `500³` volume and report measured throughput, hardware, and methodology. |
+| NFR-01 | **Required:** more than 30 processing slices per second on 500³-byte input; **expected:** 100+ slices/s. Measured projection-only **300.4 FPS** on 120 500×500 frames. |
+| NFR-02 | Separate measurement of projection, grayscale conversion, frame composition, codec, source loading and end-to-end time. Achieved in `FullPipelineBenchmark`/`Main`; see [EXPERIMENT.md](EXPERIMENT.md). |
+| NFR-03 | Object-oriented separation, primitive contiguous memory, no per-pixel 3D object allocation. |
+| NFR-04 | JUnit tests cover positive and negative cases, geometry, NRRD/CSV parsing, video frame count and ordering, and course-file compatibility. |
+| NFR-05 | Repository uses meaningful Git commits; Stage 6 changes and final documents must be committed and pushed before submission. |
 
-## 10. Open questions before SRS version 1.0
+**FPS interpretation caveat:** the handout does not explicitly say whether MP4 encoding is included in the 30/100 FPS limits. The projection-only figure clears the stated targets, while full synthetic MP4 processing was **19.1 frames/s** in one run. If full-pipeline FPS is required, further optimization or a lecturer clarification is necessary.
 
-1. Final triangle rasterization convention and compatibility with the lecturer's reference pseudocode.
-2. Exact output dimensions and coordinate ordering for trapezoids.
-3. Numeric tolerance for isosceles geometry and collinearity/parallelism checks.
-4. Handling blank lines, comments, and CSV quoting.
-5. Whether datasets require detached NRRD headers (`.nhdr`).
-6. Whether a Java command-line invocation fully satisfies the demo interface requirement.
-7. Encoder/library selection and output behavior if no valid planes are present.
+## 7. Submission deliverables (assignment To Do 1–8)
 
----
+1. Repository and README defining the problem/scope.
+2. SRS (this document).
+3. Detailed algorithm ([ALGORITHM.md](ALGORITHM.md)).
+4. NRRD dataset and documentation ([DATASET.md](DATASET.md), `samples/`).
+5. Testing strategy ([TESTING.md](TESTING.md), `src/test/`).
+6. Implementation with incremental Git commits (`src/main/`).
+7. Executable Java `Main` using NRRD/CSV/MP4 positional arguments (IntelliJ or `run-demo.cmd`).
+8. Experiment description ([EXPERIMENT.md](EXPERIMENT.md)) and corresponding MP4 files (`results/`).
 
-**Traceability:** This draft captures the decisions accepted so far. It intentionally avoids claiming that unresolved mathematical and interface choices have been approved.
+## 8. Known exclusions / external acceptance questions
+
+- Detached `.nhdr` payloads, nonzero byte/line skip, floating-point NRRD types, negative signed 16-bit voxels and general polygons are unsupported by design.
+- Exact pixel-by-pixel equivalence to the unit-step scanline pseudocode has **not** been established; seek approval if the instructor expects literal output.
+- Whether the instructor requires one particular *Python-style* command spelling despite expressly permitting Java is not stated. The shipped Java equivalent accepts the same three file paths.
+- The lecturer's unmodified CSV contains invalid geometry; rejecting it is intentional input validation, not a parsing error.

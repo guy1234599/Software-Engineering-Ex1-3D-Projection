@@ -56,6 +56,12 @@ public final class Main {
                 throw new IllegalArgumentException("Output path must differ from input paths");
             }
 
+            // Preserve production AWT by default. The direct-RGB Picture
+            // path is experimental and selected only by the benchmark/property.
+            String videoMode = System.getProperty("projection.videoMode", "awt");
+            if (!videoMode.equals("awt") && !videoMode.equals("direct-rgb")) {
+                throw new IllegalArgumentException("Invalid projection.videoMode: " + videoMode);
+            }
             // Validate every CSV record before loading the volume or touching the output.
             List<PlaneDefinition> planes = new CsvPlaneReader().read(csv);
             CanvasSize canvas = determineCanvas(planes);
@@ -72,33 +78,69 @@ public final class Main {
             stagedOutput = Files.createTempFile(parent, ".volume-projection-", ".mp4");
 
             long projectionNanos = 0;
-            long writeNanos = 0;
+            long grayscaleNanos = 0;
+            long compositionNanos = 0;
+            long encodingNanos = 0;
+            long closeStartNanos = 0;
             try (VideoWriter writer = new VideoWriter(stagedOutput, canvas.width(), canvas.height(), FPS)) {
                 for (PlaneDefinition plane : planes) {
                     long t0 = System.nanoTime();
                     Image2D slice = projector.project(volume, plane);
                     projectionNanos += System.nanoTime() - t0;
 
+                    // Separate three costs that were previously measured together.
                     long t1 = System.nanoTime();
                     BufferedImage gray = intensities.toBufferedImage(slice);
-                    BufferedImage frame = FrameComposer.compose(gray, canvas.width(), canvas.height());
-                    writer.writeFrame(frame);
-                    writeNanos += System.nanoTime() - t1;
+                    grayscaleNanos += System.nanoTime() - t1;
+
+                    if (videoMode.equals("direct-rgb")) {
+                        // The direct RGB Picture path pads and centers the grayscale
+                        // image internally, avoiding the intermediate BufferedImage canvas.
+                        long t3 = System.nanoTime();
+                        writer.writeRgbPicture(gray);
+                        encodingNanos += System.nanoTime() - t3;
+                    } else {
+                        long t2 = System.nanoTime();
+                        BufferedImage frame = FrameComposer.compose(gray, canvas.width(), canvas.height());
+                        compositionNanos += System.nanoTime() - t2;
+
+                        long t3 = System.nanoTime();
+                        writer.writeFrame(frame);
+                        encodingNanos += System.nanoTime() - t3;
+                    }
                 }
                 if (writer.frameCount() != planes.size()) {
                     throw new IOException("Generated frame count does not match CSV planes");
                 }
+                // The implicit writer.close() below finalizes the MP4 container.
+                closeStartNanos = System.nanoTime();
             }
+            long finalizationNanos = System.nanoTime() - closeStartNanos;
 
             publish(stagedOutput, output);
             stagedOutput = null;
+            out.println("Video pipeline mode: " + videoMode);
             out.printf(Locale.ROOT, "Loaded volume: %d x %d x %d%n",
                     volume.sizeX(), volume.sizeY(), volume.sizeZ());
             out.printf(Locale.ROOT, "Frames: %d, video: %d x %d, playback: %d FPS%n",
                     planes.size(), canvas.width(), canvas.height(), FPS);
             out.printf(Locale.ROOT, "Projection: %.2f ms total, %.1f FPS (excluding image conversion and video encoding)%n",
                     projectionNanos / 1_000_000.0, fps(planes.size(), projectionNanos));
-            out.printf(Locale.ROOT, "Frame conversion + encoding: %.2f ms total%n", writeNanos / 1_000_000.0);
+            out.printf(Locale.ROOT, "Grayscale conversion: %.2f ms total%n",
+                    grayscaleNanos / 1_000_000.0);
+            out.printf(Locale.ROOT, "Frame composition: %.2f ms total%n",
+                    compositionNanos / 1_000_000.0);
+            String encodeLabel = videoMode.equals("direct-rgb")
+                    ? "Video encoding (JCodec RGB Picture)"
+                    : "Video encoding (JCodec writeFrame)";
+            out.printf(Locale.ROOT, "%s: %.2f ms total%n", encodeLabel,
+                    encodingNanos / 1_000_000.0);
+            out.printf(Locale.ROOT, "MP4 finalization (writer.close): %.2f ms%n",
+                    finalizationNanos / 1_000_000.0);
+            // Retain the original combined line for comparison with earlier benchmarks.
+            long conversionAndEncodingNanos = grayscaleNanos + compositionNanos + encodingNanos;
+            out.printf(Locale.ROOT, "Frame conversion + encoding: %.2f ms total%n",
+                    conversionAndEncodingNanos / 1_000_000.0);
             out.printf(Locale.ROOT, "Volume loading + range scan: %.2f ms%n", loadNanos / 1_000_000.0);
             out.println("Created: " + output);
             return 0;

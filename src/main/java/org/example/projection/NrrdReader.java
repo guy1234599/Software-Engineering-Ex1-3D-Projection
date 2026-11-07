@@ -15,13 +15,16 @@ import java.util.zip.GZIPInputStream;
 
 /**
  * Reader for attached, scalar 3-D NRRD files with raw/gzip encoding and
- * unsigned 8-, 16-, or 32-bit voxels.
+ * unsigned 8-, 16-, or 32-bit voxels, plus nonnegative signed 16-bit data.
+ * Signed short is accepted when every actual voxel is >= 0 (as in the
+ * lecturer's MRHead_1.nrrd); negative values are rejected explicitly
+ * because the projection pipeline uses unsigned samples.
  *
  * NRRD's first axis changes fastest. For sizes sx, sy, sz, the voxel at
  * (x,y,z) is stored at x + sx * (y + sy*z), matching ArrayVolume.
  *
  * Deliberately unsupported (with explicit errors): detached data files,
- * nonzero byte/line skips, other encodings, signed/floating voxel types,
+ * nonzero byte/line skips, other encodings, negative signed values / floating types,
  * and non-3-D data. Spatial metadata is not applied: points are voxel indices.
  */
 public final class NrrdReader {
@@ -101,7 +104,9 @@ public final class NrrdReader {
             throw new IOException("Volume is too large for a single Java array: " + elements + " voxels");
         }
 
-        int bytesPerVoxel = parseType(required(fields, "type"));
+        String voxelType = required(fields, "type");
+        boolean signedShort = isSignedShort(voxelType);
+        int bytesPerVoxel = parseType(voxelType);
         String encoding = required(fields, "encoding").toLowerCase(Locale.ROOT);
         boolean gzip;
         if (encoding.equals("raw")) gzip = false;
@@ -116,7 +121,7 @@ public final class NrrdReader {
             }
             little = endian.equals("little");
         }
-        return new Header(sx, sy, sz, (int) elements, bytesPerVoxel, gzip, little);
+        return new Header(sx, sy, sz, (int) elements, bytesPerVoxel, gzip, little, signedShort);
     }
 
     /** Read the text header a byte at a time to avoid buffering into the binary payload. */
@@ -160,14 +165,22 @@ public final class NrrdReader {
         }
     }
 
+    private static boolean isSignedShort(String input) {
+        String type = input.toLowerCase(Locale.ROOT).trim().replaceAll("\\s+", " ");
+        return type.equals("short") || type.equals("short int")
+                || type.equals("signed short") || type.equals("signed short int")
+                || type.equals("int16") || type.equals("int16_t");
+    }
+
     private static int parseType(String input) throws IOException {
         String type = input.toLowerCase(Locale.ROOT).trim().replaceAll("\\s+", " ");
         return switch (type) {
             case "uchar", "unsigned char", "uint8", "uint8_t" -> 1;
-            case "ushort", "unsigned short", "unsigned short int", "uint16", "uint16_t" -> 2;
+            case "ushort", "unsigned short", "unsigned short int", "uint16", "uint16_t",
+                 "short", "short int", "signed short", "signed short int", "int16", "int16_t" -> 2;
             case "uint", "unsigned int", "uint32", "uint32_t" -> 4;
             default -> throw new IOException("Unsupported NRRD scalar type: " + input
-                    + " (only unsigned 8/16/32-bit integers are supported)");
+                    + " (supported: unsigned 8/16/32-bit, nonnegative signed 16-bit)");
         };
     }
 
@@ -189,8 +202,14 @@ public final class NrrdReader {
                 for (int i = 0; i < elements; ++i) {
                     int first = chunk[2*i] & 0xff;
                     int second = chunk[2*i + 1] & 0xff;
-                    pixels[offset+i] = (short) (h.little ? (first | (second << 8))
+                    short value = (short) (h.little ? (first | (second << 8))
                             : ((first << 8) | second));
+                    if (h.signedShort && value < 0) {
+                        throw new IOException("NRRD signed short contains a negative voxel at linear index "
+                                + (offset + i) + ": " + value
+                                + ". The current projection pipeline requires nonnegative voxels.");
+                    }
+                    pixels[offset+i] = value;
                 }
                 offset += elements;
             }
@@ -224,5 +243,5 @@ public final class NrrdReader {
     }
 
     private record Header(int sx, int sy, int sz, int elements,
-                          int bytesPerVoxel, boolean gzip, boolean little) { }
+                          int bytesPerVoxel, boolean gzip, boolean little, boolean signedShort) { }
 }

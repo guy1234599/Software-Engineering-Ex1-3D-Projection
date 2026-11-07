@@ -10,10 +10,11 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Reads the assignment's numeric CSV format: one plane per line, without a header.
- * Nine values define triangle (A,B,C); twelve define trapezoid (A1,A2,B,C).
- * Blank lines are ignored; CSV comments and quoted fields are not supported.
- * All records are validated before an immutable, ordered result is returned.
+ * Reads either the project's original coordinate-only CSV (9 or 12 numeric
+ * columns) or the lecturer's spreadsheet CSV (an optional official heading,
+ * followed by 3 or 4 and its coordinates).
+ * Blank lines are ignored; arbitrary comments and quoted numeric fields are
+ * not supported. Invalid geometry fails with a precise source line number.
  */
 public final class CsvPlaneReader {
     private static final java.util.regex.Pattern DECIMAL = java.util.regex.Pattern.compile(
@@ -25,6 +26,8 @@ public final class CsvPlaneReader {
         try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             String line;
             int lineNumber = 0;
+            boolean officialHeader = false;
+            boolean sawRecord = false;
             while ((line = reader.readLine()) != null) {
                 lineNumber++;
                 // Some spreadsheet exports prepend a UTF-8 BOM to the first line.
@@ -34,7 +37,13 @@ public final class CsvPlaneReader {
                 if (line.isBlank()) {
                     continue;
                 }
-                planes.add(parseLine(file, lineNumber, line));
+                if (!sawRecord && isOfficialHeader(line)) {
+                    officialHeader = true;
+                    sawRecord = true;
+                    continue;
+                }
+                sawRecord = true;
+                planes.add(parseLine(file, lineNumber, line, officialHeader));
             }
             if (planes.isEmpty()) {
                 throw new PlaneCsvException(file, 0, "No plane definitions found");
@@ -47,13 +56,53 @@ public final class CsvPlaneReader {
         return List.copyOf(planes);
     }
 
-    private static PlaneDefinition parseLine(Path file, int lineNumber, String line)
-            throws PlaneCsvException {
-        String[] tokens = line.split(",", -1);
-        if (tokens.length != 9 && tokens.length != 12) {
-            throw new PlaneCsvException(file, lineNumber,
-                    "Expected 9 coordinates (triangle) or 12 (trapezoid), found "
-                            + tokens.length);
+    /** Do not silently skip arbitrary text: recognize the exact official column layout. */
+    private static boolean isOfficialHeader(String line) {
+        String[] cells = line.split(",", -1);
+        if (cells.length != 13 || !cells[0].trim().replace("\"", "")
+                .equalsIgnoreCase("Number of Points (3 or 4)")) {
+            return false;
+        }
+        for (int i = 1; i <= 12; i++) {
+            String expected = "" + "xyz".charAt((i - 1) % 3) + ((i - 1) / 3 + 1);
+            if (!cells[i].trim().equalsIgnoreCase(expected)) return false;
+        }
+        return true;
+    }
+
+    private static PlaneDefinition parseLine(Path file, int lineNumber, String line,
+                                             boolean officialHeader) throws PlaneCsvException {
+        String[] original = line.split(",", -1);
+        String[] tokens;
+        if (!officialHeader && (original.length == 9 || original.length == 12)) {
+            tokens = original; // Existing coordinate-only format.
+        } else {
+            if (original.length != 10 && original.length != 13) {
+                throw new PlaneCsvException(file, lineNumber,
+                        "Expected 9 or 12 coordinates, or 3/4 followed by coordinates; found "
+                                + original.length + " CSV columns");
+            }
+            String count = original[0].trim();
+            if (!count.equals("3") && !count.equals("4")) {
+                throw new PlaneCsvException(file, lineNumber,
+                        "Expected 3 or 4 in the first 'Number of Points' column, found '"
+                                + count + "'");
+            }
+            int coordinateCount = count.equals("3") ? 9 : 12;
+            if (original.length < coordinateCount + 1) {
+                throw new PlaneCsvException(file, lineNumber,
+                        "Point count " + count + " requires " + coordinateCount + " coordinates");
+            }
+            // Google Sheets CSV exports may keep blank x4/y4/z4 fields in
+            // 3-point rows under the official 13-column header.
+            for (int i = coordinateCount + 1; i < original.length; i++) {
+                if (!original[i].isBlank()) {
+                    throw new PlaneCsvException(file, lineNumber,
+                            "Unexpected coordinate " + i + " after the " + count
+                                    + " declared points");
+                }
+            }
+            tokens = java.util.Arrays.copyOfRange(original, 1, 1 + coordinateCount);
         }
         double[] values = new double[tokens.length];
         for (int i = 0; i < tokens.length; i++) {
